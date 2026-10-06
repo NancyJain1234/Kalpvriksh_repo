@@ -1,0 +1,4 @@
+*.exe
+users.txt
+temp.txt
+.vscode/

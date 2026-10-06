@@ -8,102 +8,101 @@
 
 #define MAX 100
 
-int getInt(char message[]){
-    int num;
-    char ch = 0;
-    while(1){
-        printf("%s", message);
-        if(scanf("%d%c", &num, &ch) == 2 && ch == '\n' && num > 0){
-            return num;
-        }
-        printf("Invalid input. Enter numbers only.\n");
-        while(ch != '\n'){
-            ch = getchar();
-        }
-        ch = 0;
+int parseExpression(const char *expression , int operands[] , char ops[] , int *count){
+    int pos = 0 , used;
+
+    if(sscanf(expression + pos , "%d%n" , &operands[0], &used) != 1){
+        return 1;
     }
+    pos += used;
+    *count = 1;
+    while(sscanf(expression + pos , " %c%n" , &ops[*count - 1] , &used) == 1){
+        pos += used;
+        if(ops[*count - 1] != '+' && ops[*count - 1] != '-' && ops[*count - 1] != '*' && ops[*count - 1] != '/'){
+            return 1;
+        }
+        if(sscanf(expression + pos , "%d%n" , &operands[*count] , &used) != 1){
+            return 1;
+        }
+        pos += used;
+        (*count)++;
+    }
+    return 0;
+}
+
+int applyOperator(int a , int b , char op , int *result){
+    switch(op){
+        case '+':
+            *result = a + b;
+            break;
+        case '-':
+            *result = a - b;
+            break;
+        case '*':
+            *result = a * b;
+            break;
+        case '/':
+            if(b == 0){
+                return 2;
+            }
+            *result = a / b;
+            break;
+        default:
+            return 1;
+    }
+    return 0;
+}
+
+int evaluate(int operands[] , char ops[] , int count , int *result){
+    int i = 0 , j , status;
+
+    while(i < count - 1){
+        if(ops[i] == '*' || ops[i] == '/'){
+            status = applyOperator(operands[i] , operands[i+1] , ops[i] , &operands[i]);
+            if(status != 0){
+                return status;
+            }
+            for(j = i + 1 ; j < count - 1 ; j++){
+                operands[j] = operands[j + 1];
+                ops[j - 1] = ops[j];
+            }
+            count--;
+        }
+        else{
+            i++;
+        }
+    }
+
+    *result = operands[0];
+    for(i = 0 ; i < count - 1 ; i++){
+        status = applyOperator(*result , operands[i+1] , ops[i] , result);
+        if(status != 0){
+            return status;
+        }
+    }
+    return 0;
 }
 
 int main(){
-    int choice;
-    do{
-        printf("\nPress 1 to enter expression:\n");
-        printf("Enter 2 to exit.\n");
-        choice = getInt("Enter your choice: ");
-        switch(choice){
-            case 1:
-            {
-                char expression[MAX] , operator[MAX];
-                int operands[MAX];
-                int count = 0 , pos = 0 , used , i , j ;
-                printf("Enter the expression : ");
-                if(fgets(expression , MAX , stdin) == NULL){
-                    printf("Error: Invalid Expression.");
-                    return 0;
-                }
-                if(sscanf(expression + pos , "%d%n" , &operands[count] , &used) != 1){
-                    printf("Error: Invalid Expression.");
-                    return 0;
-                }
+    char expression[MAX] , ops[MAX];
+    int operands[MAX];
+    int count = 0 , result = 0 , status;
+    if(fgets(expression , MAX , stdin) == NULL){
+        printf("Error: Invalid expression.\n");
+        return 0;
+    }
+    
+    status = parseExpression(expression , operands , ops , &count);
+    if(status == 0){
+        status = evaluate(operands , ops , count , &result);
+    }
 
-                pos += used;
-                count = 1;
-                while(sscanf(expression + pos , " %c%n" , &operator[count - 1] , &used) == 1){
-                    pos += used;
-                    if(operator[count - 1] != '+' && operator[count - 1] != '-' && operator[count - 1] != '*' && operator[count - 1] != '/'){
-                        printf("Error: Invalid Expression.");
-                        return 0;
-                    }
-                    if(sscanf(expression + pos , "%d%n" , &operands[count] , &used) != 1){
-                        printf("Error: Invalid Expression.");
-                        return 0;
-                    }
-                    pos += used;
-                    count++;
-                    i = 0;
-                    while(i < count - 1){
-                        if(operator[i] == '*' || operator[i] == '/'){
-                            if(operator[i] == '*'){
-                                operands[i] = operands[i] * operands[i + 1];
-                            }else{
-                                if(operands[i + 1] == 0){
-                                    printf("Error: Division by zero.");
-                                    return 0;
-                                }
-                                operands[i] = operands[i] / operands[i + 1];
-                            }
-                            for(j = i + 1 ; j < count - 1 ; j++){
-                                operands[j] = operands[j + 1];
-                                operator[j - 1] = operator[j];
-                            }
-                            count--;
-                        }
-                        else{
-                            i++;
-                        }
-                    }
-                }
-                int result = operands[0];
-                for(i = 0 ; i < count - 1 ; i++){
-                    if(operator[i] == '+'){
-                        result += operands[i + 1];
-                    }
-                    else{
-                        result -= operands[i + 1];
-                    }
-                }
-                printf("Result: %d\n", result);
-                break;
-            }
-            case 2:
-            {
-                printf("Exiting.");
-                break;
-            }
-            default:
-                printf("Invalid Choice.");
-                break;
-        }
-    }while(choice != 2);
+    if(status == 1){
+        printf("Error: Invalid expression.\n");
+    }else if(status == 2){
+        printf("Error: Division by zero.\n");
+    }else{
+        printf("%d\n", result);
+    }
     return 0;
 }

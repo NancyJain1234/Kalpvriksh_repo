@@ -7,220 +7,286 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <limits.h>
 
-#define MAX_EMP 100
-#define SIZE 100
+#define NAME_SIZE 100
+#define DEG_SIZE 50
+#define LINE_LEN 200
+#define INDENT 4
+#define INPUT_EOF INT_MIN
 
 struct Employee{
     int id;
-    char name[SIZE];
-    char designation[SIZE];
+    char name[NAME_SIZE];
+    char designation[DEG_SIZE];
     struct Employee *manager;
-    struct Employee *reports[MAX_EMP];
-    int reportCount;
-};
-struct Employee *ceo = NULL;
-int employeeCount = 0;
+    struct Employee *firstReport;
+    struct Employee *nextReport;
+};   
 
-void clearBuffer(){
+int readLine(char *buffer , int size){
+    if(fgets(buffer , size , stdin) == NULL) return -1;
+    char *newLine = strchr(buffer , '\n');
+    if(newLine != NULL){
+        *newLine = '\0';
+        return 1;
+    }
+    if(feof(stdin)) return 1;
     int ch;
     while((ch = getchar()) != '\n' && ch != EOF){}
+    return 0;
 }
 
-struct Employee *searchTree(struct Employee *employee , int id){
+int inputInt(const char *prompt){
+    char input[LINE_LEN] , extra;
+    int n;
+    while(1){
+        printf("%s" , prompt);
+        int r = readLine(input , sizeof(input));
+        if(r == -1) return INPUT_EOF;
+        if(r == 1 && sscanf(input , "%d %c", &n , &extra) == 1 && n > 0)    return n;
+        printf("Enter only an integer.\n");
+    }
+}
+
+int inputText(const char *prompt , char *buffer , int size){
+    char input[LINE_LEN];
+    while(1){
+        printf("%s", prompt);
+        int r = readLine(input , sizeof(input));
+        if(r == -1) return -1;
+        if(r == 0 || strlen(input) >= size){
+            printf("Text must be shorter.\n");
+            continue;
+        }
+        int found = 0 , valid = 1;
+        for(int i = 0 ; input[i] != '\0' ; i++){
+            unsigned char c = (unsigned char)input[i];
+            if(!isalpha(c) && !isspace(c)){
+                valid = 0;
+                break;
+            }
+            if(!isspace(c)) found = 1;
+        }
+        if(!valid){
+            printf("Enter only letters.\n");
+            continue;
+        }
+        if(!found){
+            printf("Text can't be empty.\n");
+            continue;
+        }
+        strcpy(buffer , input);
+        return 1;
+    }
+}
+
+struct Employee *searchEmployee(struct Employee *employee , int id){
     if(employee == NULL) return NULL;
     if(employee->id == id) return employee;
-    for(int i = 0 ; i < employee->reportCount ; i++){
-        struct Employee *found = searchTree(employee->reports[i] , id);
-        if(found != NULL) return found;
-    }
-    return NULL;
+    struct Employee *found = searchEmployee(employee->firstReport , id);
+    if(found != NULL) return found;
+    return searchEmployee(employee->nextReport , id);
 }
 
-struct Employee *findEmp(int id){
-    return searchTree(ceo , id);
+int countReports(struct Employee *employee){
+    if(employee == NULL) return 0;
+    return 1 + countReports(employee->nextReport);
+}
+
+int countEmployee(struct Employee *root){
+    if(root == NULL) return 0;
+    return 1 + countEmployee(root->firstReport) + countEmployee(root->nextReport);
+}
+
+struct Employee *firstLastEmployee(struct Employee *employee){
+    if(employee == NULL || employee->nextReport==NULL) return employee;
+    return firstLastEmployee(employee->nextReport);
+}
+
+struct Employee *firstBestManager(struct Employee *curr , struct Employee *target , struct Employee *best , int *minReports){
+    if(curr == NULL) return best;
+    if(curr != target){
+        int count = countReports(curr -> firstReport);
+        if(count < *minReports){
+            *minReports = count;
+            best = curr;
+        }
+    }
+    return firstBestManager(curr->nextReport , target , best , minReports);
+}
+
+void changeManager(struct Employee *employee , struct Employee *manager){
+    if(employee == NULL) return;
+    employee->manager = manager;
+    changeManager(employee->nextReport , manager);
+}
+
+void unlinkReport(struct Employee **head , struct Employee *target){
+    if(*head == NULL)  return;
+    if(*head == target){
+        *head = target->nextReport;
+        return;
+    }
+    unlinkReport(&((*head)->nextReport) , target);
+}
+
+void linkReports(struct Employee *manager , struct Employee *employee){
+    employee->manager = manager;
+    employee->nextReport = NULL;
+    if(manager->firstReport == NULL) manager->firstReport = employee;
+    else{
+        firstLastEmployee(manager->firstReport)->nextReport = employee;
+    }
 }
 
 void freeTree(struct Employee *employee){
     if(employee == NULL) return;
-    for(int i = 0 ; i < employee->reportCount ; i++){
-        freeTree(employee->reports[i]);
-    }
+    freeTree(employee->firstReport);
+    freeTree(employee->nextReport);
     free(employee);
 }
 
-void addEmployee(){
-    int id , managerID;
-    char name[SIZE] , designation[SIZE];
-    struct Employee *manager = NULL;
-    if(employeeCount >= MAX_EMP){
-        printf("organization full.\n");
-        return;
-    }
-    printf("Enter details:\n");
-    if(scanf("%d", &id) != 1 || id <= 0){
-        printf("invalid employee id.\n");
-        clearBuffer();
-        return;
-    }
-    clearBuffer();
-    if(findEmp(id) != NULL){
-        printf("employee already exists.\n");
-        return;
-    }
-    if(scanf(" %99[^\n]",name) != 1){
-        printf("invalid name.\n");
-        clearBuffer();
-        return;
-    }
-    clearBuffer();
-    if(scanf(" %99[^\n]",designation) != 1){
-        printf("invalid designation.\n");
-        clearBuffer();
-        return;
-    }
-    clearBuffer();
+struct Employee *createEmployee(int id){
+    struct Employee *employee = malloc(sizeof(struct Employee));
+    if(employee == NULL) return NULL;
+    employee->id = id;
+    employee->manager = NULL;
+    employee -> firstReport = NULL;
+    employee -> nextReport = NULL;
+    return employee;
+}
 
-    if(ceo != NULL){
-        printf("Enter reporting Manager ID: ");
-        if(scanf("%d" , &managerID) != 1 || managerID <= 0){
-            printf("invalid manager id.\n");
-            clearBuffer();
-            return;
-        }
-        clearBuffer();
-        if(managerID == id){
-            printf("invalid.\n");
-            return;
-        }
-        manager = findEmp(managerID);
-        if(manager == NULL){
-            printf("no reporting found.\n");
-            return;
-        }
-        if(manager->reportCount >= MAX_EMP){
-            printf("invalid.\n");
-            return;
-        }
+int readEmployeeDetails(struct Employee *employee){
+    if(inputText("Enter employee name: ", employee->name , NAME_SIZE) == -1) return -1;
+    if(inputText("Enter designation: ", employee -> designation , DEG_SIZE) == -1) return -1;
+    return 1;
+}
+
+int readNewId(struct Employee *root){
+    int id = inputInt("Enter employee ID: ");
+    if(id == INPUT_EOF) return -1;
+    if(searchEmployee(root , id) != NULL){
+        printf("Employee ID already exists.\n");
+        return 0;
     }
-    struct Employee *newEmployee = malloc(sizeof (struct Employee));
+    return id;
+}
+
+int insertEmployee(struct Employee **root){
+    int id = readNewId(*root);
+    if(id <= 0) return id;
+    struct Employee *newEmployee = createEmployee(id);
     if(newEmployee == NULL){
-        printf("allocation failed.\n");
-        return;
+        printf("Memory allocation failed!\n");
+        return -1;
     }
-
-    newEmployee->id = id;
-    strcpy(newEmployee->name , name);
-    strcpy(newEmployee->designation , designation);
-    newEmployee->manager = manager;
-    newEmployee->reportCount = 0;
-    if(manager != NULL){
-        manager->reports[manager->reportCount] = newEmployee;
-        manager->reportCount++;
-    }else{
-        ceo = newEmployee;
+    if(readEmployeeDetails(newEmployee) == -1){
+        free(newEmployee);
+        return -1;
     }
-    employeeCount++;
+    if(*root == NULL){
+        *root = newEmployee;
+        printf("CEO added successfully.\n");
+        return 1;
+    }
+    int managerID = inputInt("Enter reporting manager ID: ");
+    if(managerID == INPUT_EOF){
+        free(newEmployee);
+        return -1;
+    }
+    if(managerID == id){
+        printf("An employee cannot manage themselves.\n");
+        free(newEmployee);
+        return 0;
+    }
+    struct Employee *manager = searchEmployee(*root , managerID);
     if(manager == NULL){
-        printf("this employee is the top-level employee (CEO).\n");
+        printf("Manager not found!\n");
+        free(newEmployee);
+        return 0;
     }
+    linkReports(manager , newEmployee);
+    printf("Employee added successfully!\n");
+    return 1;
 }
 
-int countEmployees(struct Employee *employee){
-    if(employee == NULL) return 0;
-    int total = 0;
-    for(int i = 0 ; i < employee -> reportCount ; i++){
-        total += 1 + countEmployees(employee->reports[i]);
-    }
-    return total;
+void reassignReportees(struct Employee *reportees , struct Employee *best , struct Employee *manager){
+    if(reportees == NULL) return;
+    struct Employee *destination = (best != NULL) ? best : manager;
+    changeManager(reportees , destination);
+    if(destination->firstReport == NULL)    destination->firstReport = reportees;
+    else firstLastEmployee(destination->firstReport)->nextReport = reportees;
 }
 
-void displayHierarchy(struct Employee *employee , int level){
+int deleteEmployee(struct Employee **root , int id){
+    struct Employee *target = searchEmployee(*root , id);
+    if(target == NULL){
+        printf("Employee does not exist!\n");
+        return 0;
+    }
+    if(*root == target){
+        printf("CEO can't be removed.\n");
+        return 0;
+    }
+    struct Employee *manager = target->manager;
+    struct Employee *reportees = target->firstReport;
+    int minReports = INT_MAX;
+    struct Employee *best = firstBestManager(manager->firstReport , target , NULL , &minReports);
+    target->firstReport = NULL;
+    unlinkReport(&manager->firstReport , target);
+    reassignReportees(reportees , best , manager);
+    free(target);
+    printf("Employee removed successfully.\n");
+    return 1;
+}
+
+void displayHierarchy(struct Employee *employee , int level , int showSibling){
     if(employee == NULL) return;
-    for (int i = 0; i < level; i++){
-        printf("    ");
-    }
-    printf("%d - %s - %s\n" , employee->id , employee->name , employee -> designation);
-    for(int i = 0 ; i < employee->reportCount ; i++){
-        displayHierarchy(employee->reports[i],level + 1);
-    }
+    printf("%*s%d - %s - %s\n" ,level * INDENT, "", employee->id , employee->name , employee -> designation);
+    displayHierarchy(employee->firstReport , level + 1 , 1);
+    if(showSibling) displayHierarchy(employee->nextReport , level , 1);
 }
 
-void showEmployees(){
-    int id;
-    printf("Enter employee id: ");
-    if(scanf("%d" , &id) != 1){
-        printf("invalid input.\n");
-        clearBuffer();
+void showCompleteHierarchy(struct Employee *root){
+    if(!root){
+        printf("Organization is empty.\n");
         return;
     }
-    clearBuffer();
-    struct Employee *employee = findEmp(id);
+    printf("\n===== ORGANIZATION HIERARCHY =====\n\n");
+    displayHierarchy(root , 0 , 0);
+    printf("\nTotal Employees: %d\n", countEmployee(root));
+}
+
+int handleAdd(struct Employee **root){
+    return insertEmployee(root);
+}
+
+int handleRemove(struct Employee **root){
+    int id = inputInt("Enter Employee ID to remove: ");
+    if(id == INPUT_EOF) return -1;
+    deleteEmployee(root , id);
+    return 0;
+}
+
+int handleShowOne(struct Employee *root){
+    int id = inputInt("Enter Employee ID: ");
+    if(id == INPUT_EOF) return -1;
+    struct Employee *employee = searchEmployee(root , id);
     if(employee == NULL){
-        printf("employee not found.\n");
-        return;
+        printf("Employee not found.\n");
+        return 0;
     }
-    displayHierarchy(employee , 0);
-    printf("Total Employees Under %d: %d\n",id , countEmployees(employee));
-}
-
-void showOrg(){
-    if(ceo == NULL) return;
-    printf("\n===== ORGANIZATION HIERARCHY =====\n");
-    displayHierarchy(ceo , 0);
-    printf("Total Employees: %d\n", 1 + countEmployees(ceo));
-}
-
-void removeEmployee(){
-    int id;
-    printf("Enter Employee ID to remove: ");
-    if(scanf("%d", &id) != 1){
-        printf("Invalid input.\n");
-        clearBuffer();
-        return;
-    }
-    clearBuffer();
-    struct Employee *employee = findEmp(id);
-    if(employee == NULL)   return;
-    if(employee->manager == NULL){
-        printf("CEO cannot be removed.\n");
-        return;
-    }
-    struct Employee *manager = employee->manager;
-    struct Employee *target = manager;
-    int fewest = -1;
-    for(int i = 0; i < manager->reportCount; i++){
-        struct Employee *sibling = manager->reports[i];
-        if(sibling == employee)    continue;    
-        if(fewest == -1 || sibling->reportCount < fewest) {
-            fewest = sibling->reportCount;
-            target = sibling;
-        }
-    }
-    int targetCount = target->reportCount;
-    if(target == manager) targetCount--;
-    if(targetCount + employee->reportCount > MAX_EMP){
-        printf("Cannot remove.\n");
-        return;
-    }
-    int position = 0;
-    while(manager->reports[position] != employee) position++;
-    for(int i = position; i < manager->reportCount - 1; i++){
-        manager->reports[i] = manager->reports[i + 1];
-    }
-    manager->reportCount--;
-    for(int i = 0; i < employee->reportCount; i++){
-        struct Employee *report = employee->reports[i];
-        report->manager = target;
-        target->reports[target->reportCount] = report;
-        target->reportCount++;
-    }
-    free(employee);
-    employeeCount--;
+    printf("\n");
+    displayHierarchy(employee , 0 , 0);
+    printf("\nTotal Employees Under %d: %d\n", id, countEmployee(employee->firstReport));
+    return 0;
 }
 
 int main(){
-    int choice , r;
+    struct Employee *root = NULL;
+    int choice;
     while(1){
         printf("\n===== EMPLOYEE HIERARCHY MANAGEMENT =====\n");
         printf("1. Add Employee\n");
@@ -228,37 +294,28 @@ int main(){
         printf("3. Display Employee Hierarchy\n");
         printf("4. Display Complete Hierarchy\n");
         printf("5. Exit\n");
-        printf("Enter your choice: ");
-        r = scanf("%d", &choice);
-        if(r == EOF){
-            freeTree(ceo);
-            return 0;
-        }
-        if(r != 1){
-            printf("invalid input.\n");
-            clearBuffer();
-            return 0;
-        }
-        clearBuffer();
+        printf("\n");
+        choice = inputInt("Enter your choice: ");
+        if(choice == INPUT_EOF || choice == 5) break;
+
         switch (choice){
             case 1:
-                addEmployee();
+                if(handleAdd(&root) == -1) choice = 5;
                 break;
             case 2:
-                removeEmployee();
+                if(handleRemove(&root) == -1) choice = 5;
                 break;
             case 3:
-                showEmployees();
+                if(handleShowOne(root) == -1) choice = 5;
                 break;
             case 4:
-                showOrg();
+                showCompleteHierarchy(root);
                 break;
-            case 5:
-                freeTree(ceo);
-                return 0;
             default:
-                printf("invalid choice.\n");
+                printf("Invalid choice.\n");
         }
+        if(choice == 5) break;
     }
+    freeTree(root);
     return 0;
 }

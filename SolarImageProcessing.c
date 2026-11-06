@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
+#include <ctype.h>
 
 #define PIXELS 256
 
@@ -23,7 +25,7 @@ void RotateP(int n , int **matrix){
     for(int i = 0 ; i < n ; i++){               //reverse
         for(int j = 0 ; j < n / 2 ; j++){
             int **p = (matrix + i * n + j);
-            int **q = (matrix + i * n + (n - 1 + j));
+            int **q = (matrix + i * n + (n - 1 - j));
             int *temp = *p;
             *p = *q;
             *q = temp;
@@ -35,7 +37,7 @@ int smoothingFilter(int n , int **matrix){
     int *prev = malloc(n * sizeof(int));
     int *curr = malloc(n * sizeof(int));
     if(prev == NULL || curr == NULL){
-        printf("Dynamic Allocation failed!");
+        printf("Dynamic Allocation failed!\n");
         free(prev);
         free(curr);
         return 0;
@@ -68,8 +70,8 @@ int smoothingFilter(int n , int **matrix){
     return 1;
 }
 
-void generateImage(int n , int *data){
-    for(int i = 0 ; i < n ; i++){
+void generateImage(int count , int *data){
+    for(int i = 0 ; i < count ; i++){
         *(data + i) = rand() % PIXELS;
     }
 }
@@ -85,11 +87,29 @@ void displayMatrix(int n , int **matrix){
 
 int main(){
     int n;
+    char input[100] , *endptr;
+    long value;
     printf("Enter matrix size (2-10): \n");
-    if(scanf("%d" , &n) != 1 || n < 2 || n > 10){
-        printf("Invalid input.");
+    if(fgets(input , sizeof(input) , stdin) == NULL){
+        printf("Invalid input.\n");
         return 1;
     }
+    if(input[0] != '\0' && input[strlen(input) - 1] != '\n' && !feof(stdin)){
+        int ch;
+        while((ch = getchar()) != '\n' && ch != EOF){}
+        printf("Invalid input.\n");
+        return 1;
+    }
+    value = strtol(input , &endptr , 10);
+    while(isspace((unsigned char)* endptr)){
+        endptr++;
+    }
+    if(endptr == input || *endptr != '\0' || value < 2 || value > 10){
+        printf("Invalid input.\n");
+        return 1;
+    }
+    n = (int)value;
+
     int *data = malloc(n * n * sizeof(int));
     int **matrix = malloc(n * n * sizeof(int *));
     if(data == NULL || matrix == NULL){
@@ -113,7 +133,6 @@ int main(){
     displayMatrix(n , matrix);
 
     if(!smoothingFilter(n , matrix)){
-        printf("Dynamic Allocation failed!\n");
         free(data);
         free(matrix);
         return 1;

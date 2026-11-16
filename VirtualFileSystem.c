@@ -25,59 +25,63 @@ typedef struct FreeBlock{
     struct FreeBlock *next, *prev;
 }FreeBlock;
 
+typedef struct BlockList{
+    FreeBlock *head, *tail;
+    int count;
+}BlockList;
+
 typedef struct FileNode{
     char name[MAX_NAME + 1];
     NodeType type;
     struct FileNode *parent;
     struct FileNode *next, *prev;
     struct FileNode *children;
-    int *blockPointers;
-    int blockCount;
+    BlockList blocks;
     size_t contentSize;
 }FileNode;
 
 static unsigned char virtualDisk[MAX_BLOCKS][BLOCK_SIZE];
-static FreeBlock *freeHead = NULL, *freeTail = NULL;
+static BlockList freeList = { NULL, NULL, 0 };
 static int numBlocks = DEFAULT_BLOCKS;
-static int freeCount = 0;
 static FileNode *root = NULL;
 static FileNode *cwd = NULL;
 
-static void addFreeBlock(int index){
-    FreeBlock *b = malloc(sizeof(FreeBlock));
-    if(!b){ 
-        fprintf(stderr, "Out of memory\n"); 
-        exit(EXIT_FAILURE); 
-    }
-    b->index = index;
+static void listPush(BlockList *l, FreeBlock *b){
     b->next = NULL;
-    b->prev = freeTail;
-    if (freeTail) freeTail->next = b; else freeHead = b;
-    freeTail = b;
-    freeCount++;
+    b->prev = l->tail;
+    if(l->tail) l->tail->next = b;
+    else l->head = b;
+    l->tail = b;
+    l->count++;
 }
 
-static int allocateBlock(void){
-    if(!freeHead) return -1;
-    FreeBlock *b = freeHead;
-    int index = b->index;
-    freeHead = b->next;
-    if (freeHead) freeHead->prev = NULL; else freeTail = NULL;
-    free(b);
-    freeCount--;
-    return index;
+static FreeBlock *listPop(BlockList *l){
+    FreeBlock *b = l->head;
+    if(!b) return NULL;
+    l->head = b->next;
+    if(l->head) l->head->prev = NULL;
+    else l->tail = NULL;
+    b->next = b->prev = NULL;
+    l->count--;
+    return b;
 }
 
-static void releaseBlock(int index){ 
-    addFreeBlock(index); 
+static void freeBlockList(BlockList *l){
+    FreeBlock *b;
+    while((b = listPop(l))) free(b);
+}
+
+static int addFreeBlock(int index){
+    FreeBlock *b = malloc(sizeof(FreeBlock));
+    if(!b) return 0;
+    b->index = index;
+    listPush(&freeList , b);
+    return 1;
 }
 
 static FileNode *createNode(const char *name, NodeType type){
     FileNode *n = calloc(1, sizeof(FileNode));
-    if(!n){ 
-        fprintf(stderr, "Out of memory\n"); 
-        exit(EXIT_FAILURE); 
-    }
+    if(!n) return NULL;
     strncpy(n->name, name, MAX_NAME);
     n->name[MAX_NAME] = '\0';
     n->type = type;
@@ -121,10 +125,8 @@ static FileNode *findChild(FileNode *parent, const char *name){
 }
 
 static void releaseFileBlocks(FileNode *f){
-    for(int i = 0; i < f->blockCount; i++) releaseBlock(f->blockPointers[i]);
-    free(f->blockPointers);
-    f->blockPointers = NULL;
-    f->blockCount = 0;
+    FreeBlock *b;
+    while((b = listPop(&f->blocks))) listPush(&freeList, b);
     f->contentSize = 0;
 }
 
@@ -139,28 +141,23 @@ static void freeTree(FileNode *n){
             cur = nx;
         }
     }
-    free(n->blockPointers);
+    freeBlockList(&n->blocks);
     free(n);
 }
 
-static void buildPath(FileNode *n, char *out){
-    if(n == root){ 
-        out[0] = '\0'; 
-        return; 
+static void printPath(const FileNode *n){
+    if(!n->parent){
+        putchar('/');
+        return;
     }
-    buildPath(n->parent, out);
-    strcat(out, "/");
-    strcat(out, n->name);
+    if(n->parent->parent) printPath(n->parent);
+    printf("/%s", n->name);
 }
 
 static void displayPrompt(void){
 #if PROMPT_FULL_PATH
-    if(cwd == root) printf("/ > ");
-    else{
-        char path[4096] = "";
-        buildPath(cwd, path);
-        printf("%s > ", path);
-    }
+    printPath(cwd);
+    printf(" > ");
 #else
     if(cwd == root) printf("/ > ");
     else printf("%s > ", cwd->name);
@@ -188,24 +185,28 @@ static int validName(const char *name, const char *what){
     return 1;
 }
 
-static void makeDirectory(const char *name){
-    if(!validName(name, "directory")) return;
+static void addNode(const char *name, NodeType type){
+    const char *what = type == DIR_TYPE ? "directory" : "file";
+    if(!validName(name, what)) return;
     if(findChild(cwd, name)){ 
         printf("Error: '%s' already exists.\n", name); 
         return; 
     }
-    insertChild(cwd, createNode(name, DIR_TYPE));
-    printf("Directory '%s' created successfully.\n", name);
+    FileNode *n = createNode(name, type);
+    if(!n){
+        printf("Error: out of memory, %s not created.\n", what);
+        return;
+    }
+    insertChild(cwd, n);
+    printf("%s '%s' created successfully.\n", type == DIR_TYPE ? "Directory" : "File", name);
 }
 
-static void createFile(const char *name){
-    if(!validName(name, "file")) return;
-    if(findChild(cwd, name)) { 
-        printf("Error: '%s' already exists.\n", name); 
-        return; 
-    }
-    insertChild(cwd, createNode(name, FILE_TYPE));
-    printf("File '%s' created successfully.\n", name);
+static void makeDirectory(const char *name){ 
+    addNode(name, DIR_TYPE); 
+}
+
+static void createFile(const char *name){ 
+    addNode(name, FILE_TYPE);
 }
 
 static void writeFile(const char *name, const char *content, size_t size){
@@ -219,26 +220,20 @@ static void writeFile(const char *name, const char *content, size_t size){
         return; 
     }
     int required = (int)((size + BLOCK_SIZE - 1) / BLOCK_SIZE);
-    int available = freeCount + f->blockCount;
+    int available = freeList.count + f->blocks.count;
     if(required > available){
-        printf("Error: disk full. Need %d blocks, only %d available.\n",
-               required, available);
+        printf("Error: disk full. Need %d blocks, only %d available.\n", required, available);
         return;
     }
     releaseFileBlocks(f);
-    if(required > 0){
-        f->blockPointers = malloc(sizeof(int) * required);
-        if (!f->blockPointers) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
-    }
     size_t written = 0;
     for(int i = 0; i < required; i++){
-        int block = allocateBlock();
-        f->blockPointers[i] = block;
-        f->blockCount++;
+        FreeBlock *b = listPop(&freeList);
+        listPush(&f->blocks, b);
         size_t remaining = size - written;
         size_t bytes = remaining < BLOCK_SIZE ? remaining : BLOCK_SIZE;
-        memset(virtualDisk[block], 0, BLOCK_SIZE);
-        memcpy(virtualDisk[block], content + written, bytes);
+        memset(virtualDisk[b->index], 0, BLOCK_SIZE);
+        memcpy(virtualDisk[b->index], content + written, bytes);
         written += bytes;
     }
     f->contentSize = size;
@@ -246,10 +241,6 @@ static void writeFile(const char *name, const char *content, size_t size){
 }
 
 static void readFile(const char *name){
-    if(!name || !*name){ 
-        printf("Usage: read <file>\n"); 
-        return; 
-    }
     FileNode *f = findChild(cwd, name);
     if(!f){ 
         printf("Error: file '%s' not found.\n", name); 
@@ -264,19 +255,15 @@ static void readFile(const char *name){
         return; 
     }
     size_t remaining = f->contentSize;
-    for(int i = 0; i < f->blockCount && remaining > 0; i++){
+    for(FreeBlock *b = f->blocks.head; b && remaining > 0; b = b->next){
         size_t bytes = remaining < BLOCK_SIZE ? remaining : BLOCK_SIZE;
-        fwrite(virtualDisk[f->blockPointers[i]], 1, bytes, stdout);
+        fwrite(virtualDisk[b->index], 1, bytes, stdout);
         remaining -= bytes;
     }
     printf("\n");
 }
 
 static void deleteFile(const char *name){
-    if(!name || !*name){ 
-        printf("Usage: delete <file>\n"); 
-        return; 
-    }
     FileNode *f = findChild(cwd, name);
     if(!f){ 
         printf("Error: file '%s' not found.\n", name); 
@@ -293,10 +280,6 @@ static void deleteFile(const char *name){
 }
 
 static void removeDirectory(const char *name){
-    if(!name || !*name){ 
-        printf("Usage: rmdir <directory>\n"); 
-        return; 
-    }
     FileNode *d = findChild(cwd, name);
     if(!d){ 
         printf("Error: directory '%s' not found.\n", name); 
@@ -328,52 +311,52 @@ static void listDirectory(void){
 }
 
 static void changeDirectory(const char *name){
-    if(!name || !*name){ 
-        printf("Usage: cd <directory>\n"); 
-        return; 
-    }
     if(!strcmp(name, "/")) cwd = root;
-    else if(!strcmp(name, "..")) {
+    else if(!strcmp(name, "..")){
         if(cwd == root){ 
             printf("Already at root.\n"); 
             return; 
         }
         cwd = cwd->parent;
-    }else if(!strcmp(name, ".")) {
+    }else if(!strcmp(name, ".")){
     }else{
         FileNode *d = findChild(cwd, name);
-        if(!d){ printf("Error: directory '%s' not found.\n", name); return; }
-        if(d->type != DIR_TYPE){ printf("Error: '%s' is not a directory.\n", name); return; }
+        if(!d){ 
+            printf("Error: directory '%s' not found.\n", name); 
+            return; 
+        }
+        if(d->type != DIR_TYPE){ 
+            printf("Error: '%s' is not a directory.\n", name); 
+            return; 
+        }
         cwd = d;
     }
-    char path[4096] = "";
-    buildPath(cwd, path);
-    printf("Moved to %s\n", cwd == root ? "/" : path);
+    printf("Moved to ");
+    printPath(cwd);
+    printf("\n");
 }
 
 static void printWorkingDirectory(void){
-    char path[4096] = "";
-    buildPath(cwd, path);
-    printf("%s\n", cwd == root ? "/" : path);
+    printPath(cwd);
+    printf("\n");
 }
 
 static void diskUsage(void){
-    int used = numBlocks - freeCount;
+    int used = numBlocks - freeList.count;
     printf("Total Blocks: %d\n", numBlocks);
     printf("Used Blocks: %d\n", used);
-    printf("Free Blocks: %d\n", freeCount);
+    printf("Free Blocks: %d\n", freeList.count);
     printf("Disk Usage: %.2f%%\n", 100.0 * used / numBlocks);
 }
 
-static void exitSystem(void){
+static void releaseAll(void){
     freeTree(root);
-    while(freeHead){
-        FreeBlock *n = freeHead->next;
-        free(freeHead);
-        freeHead = n;
-    }
-    freeTail = NULL;
+    freeBlockList(&freeList);
     root = cwd = NULL;
+}
+
+static void exitSystem(void){
+    releaseAll();
     printf("Memory released. Exiting program...\n");
 }
 
@@ -395,21 +378,42 @@ static char *nextToken(char **p){
     return s;
 }
 
-static char *restOfLine(char *p){ return skipSpaces(p); }
+static int parseOneArg(char *rest, const char *usage, char **arg){
+    char *a = nextToken(&rest);
+    if(!a || nextToken(&rest)){
+        printf("%s\n", usage);
+        return 0;
+    }
+    *arg = a;
+    return 1;
+}
+
+static int parseNoArgs(char *rest, const char *usage){
+    if(nextToken(&rest)){
+        printf("%s\n", usage);
+        return 0;
+    }
+    return 1;
+}
 
 static void handleWrite(char *rest){
+    static const char *usage = "Usage: write <file> \"content\"";
     char *name = nextToken(&rest);
     if(!name){ 
-        printf("Usage: write <file> \"content\"\n"); 
+        printf("%s\n", usage); 
         return; 
     }
-    char *data = restOfLine(rest);
+    char *data = skipSpaces(rest);
     size_t len = strlen(data);
-    if(len >= 2 && (data[0] == '"' || data[0] == '\'') && data[len - 1] == data[0]){
-        data[len - 1] = '\0';
-        data++;
-        len -= 2;
+    char q = data[0];
+    if(len < 2 || (q != '"' && q != '\'') || data[len - 1] != q || memchr(data + 1, q, len - 2)){
+        printf("Error: content must be fully enclosed in matching quotes.\n");
+        printf("%s\n", usage);
+        return;
     }
+    data[len - 1] = '\0';
+    data++;
+    len -= 2;
     writeFile(name, data, len);
 }
 
@@ -422,12 +426,27 @@ int main(int argc, char **argv){
         }
         numBlocks = n;
     }
-    for(int i = 0; i < numBlocks; i++) addFreeBlock(i);
+    for(int i = 0; i < numBlocks; i++){
+        if(!addFreeBlock(i)){
+            fprintf(stderr , "Out of memory\n");
+            releaseAll();
+            return 1;
+        }
+    }
     root = createNode("/", DIR_TYPE);
+    if(!root){
+        fprintf(stderr , "Out of memory\n");
+        releaseAll();
+        return 1;
+    }
     cwd = root;
     size_t bufSize = (size_t)numBlocks * BLOCK_SIZE + 256;
     char *input = malloc(bufSize);
-    if(!input){ fprintf(stderr, "Out of memory\n"); return 1; }
+    if(!input){ 
+        fprintf(stderr, "Out of memory\n");
+        releaseAll();
+        return 1;
+    }
     printf("Compact VFS - ready. Type 'exit' to quit.\n");
     for(;;){
         displayPrompt();
@@ -445,19 +464,31 @@ int main(int argc, char **argv){
         while(len > 0 && isspace((unsigned char)input[len - 1])) input[--len] = '\0';
         char *rest = input;
         char *cmd = nextToken(&rest);
+        char *arg;
         if(!cmd) continue;
-        if(!strcmp(cmd, "exit")) break;
-        else if(!strcmp(cmd, "write"))  handleWrite(rest);
-        else if(!strcmp(cmd, "mkdir"))  makeDirectory(restOfLine(rest));
-        else if(!strcmp(cmd, "create")) createFile(restOfLine(rest));
-        else if(!strcmp(cmd, "read"))   readFile(restOfLine(rest));
-        else if(!strcmp(cmd, "delete")) deleteFile(restOfLine(rest));
-        else if(!strcmp(cmd, "rmdir"))  removeDirectory(restOfLine(rest));
-        else if(!strcmp(cmd, "cd"))     changeDirectory(restOfLine(rest));
-        else if(!strcmp(cmd, "ls"))     listDirectory();
-        else if(!strcmp(cmd, "pwd"))    printWorkingDirectory();
-        else if(!strcmp(cmd, "df"))     diskUsage();
-        else{
+        if(!strcmp(cmd, "exit")){
+            if(parseNoArgs(rest, "Usage: exit")) break;
+        }else if(!strcmp(cmd, "write")){
+            handleWrite(rest);
+        }else if(!strcmp(cmd, "mkdir")){
+            if(parseOneArg(rest, "Usage: mkdir <directory>", &arg)) makeDirectory(arg);
+        }else if(!strcmp(cmd, "create")){
+            if(parseOneArg(rest, "Usage: create <file>", &arg)) createFile(arg);
+        }else if(!strcmp(cmd, "read")){
+            if(parseOneArg(rest, "Usage: read <file>", &arg)) readFile(arg);
+        }else if(!strcmp(cmd, "delete")){
+            if(parseOneArg(rest, "Usage: delete <file>", &arg)) deleteFile(arg);
+        }else if(!strcmp(cmd, "rmdir")){
+            if(parseOneArg(rest, "Usage: rmdir <directory>", &arg)) removeDirectory(arg);
+        }else if(!strcmp(cmd, "cd")){
+            if(parseOneArg(rest, "Usage: cd <directory>", &arg)) changeDirectory(arg);
+        }else if(!strcmp(cmd, "ls")){
+            if(parseNoArgs(rest, "Usage: ls")) listDirectory();
+        }else if(!strcmp(cmd, "pwd")){
+            if(parseNoArgs(rest, "Usage: pwd")) printWorkingDirectory();
+        }else if(!strcmp(cmd, "df")){
+            if(parseNoArgs(rest, "Usage: df")) diskUsage();
+        }else{
             printf("Unknown command: %s\n", cmd);
             printf("Available commands: mkdir, create, write, read, delete, rmdir, ls, cd, pwd, df, exit\n");
         }

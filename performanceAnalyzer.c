@@ -8,7 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <ctype.h>
 #include "Players_data.h"
+
 #define TEAMCOUNT 10
 #define MIN_PLAYERID 1
 #define MAX_PLAYERID 1000
@@ -16,11 +18,18 @@
 #define MAX_PLAYER 50
 #define NAME_LENGTH 51
 
+typedef enum Role{
+    ROLE_INVALID = 0,
+    BATSMAN,
+    BOWLER,
+    ALL_ROUNDER
+} Role;
+
 typedef struct ODIPlayer{
     int PlayerID;
     char Name[NAME_LENGTH];
     char TeamName[NAME_LENGTH];
-    int Role;
+    Role Role;
     int TotalRuns;
     float BattingAverage;
     float StrikeRate;
@@ -49,6 +58,79 @@ typedef struct MaxHeap{
     HeapNode arr[TEAMCOUNT];
     int size;
 } MaxHeap;
+
+static int readLine(char *buffer , size_t size){
+    if(fgets(buffer , (int)size , stdin) == NULL) return 0;
+    size_t len = strlen(buffer);
+    if(len > 0 && buffer[len - 1] == '\n'){
+        buffer[len - 1] = '\0';
+    }else if(!feof(stdin)){
+        int ch;
+        while((ch = getchar()) != '\n' && ch != EOF){}
+        return -1;
+    }
+    return 1;
+}
+
+static void trim(char *text){
+    char *start = text;
+    while(isspace((unsigned char)*start)) start++;
+    if(start != text) memmove(text , start , strlen(start) + 1);
+    size_t len = strlen(text);
+    while(len > 0 && isspace((unsigned char)text[len - 1])) text[--len] = '\0';
+}
+
+static int readInt(const char *prompt , int *out){
+    char buffer[128];
+    printf("%s" , prompt);
+    fflush(stdout);
+    int rc = readLine(buffer , sizeof(buffer));
+    if(rc == 0) return -1;
+    if(rc < 0) return 0;
+    trim(buffer);
+    char *end;
+    long value = strtol(buffer , &end , 10);
+    if(end == buffer || *end != '\0' || value != (int)value) return 0;
+    *out = (int)value;
+    return 1;
+}
+
+static int readFloat(const char *prompt , float *out){
+    char buffer[128];
+    printf("%s" , prompt);
+    fflush(stdout);
+    int rc = readLine(buffer , sizeof(buffer));
+    if(rc == 0) return -1;
+    if(rc < 0) return 0;
+    trim(buffer);
+    char *end;
+    float value = strtof(buffer , &end);
+    if(end == buffer || *end != '\0' || !isfinite(value)) return 0;
+    *out = value;
+    return 1;
+}
+
+static int readName(const char *prompt , char *out){
+    char buffer[128];
+    printf("%s" , prompt);
+    fflush(stdout);
+    int rc = readLine(buffer , sizeof(buffer));
+    if(rc == 0) return -1;
+    if(rc < 0) return 0;
+    trim(buffer);
+    if(buffer[0] == '\0' || strlen(buffer) >= NAME_LENGTH) return 0;
+    strcpy(out , buffer);
+    return 1;
+}
+
+const char* roleName(Role role , int plural){
+    switch(role){
+        case BATSMAN: return plural ? "Batsmen" : "Batsman";
+        case BOWLER:  return plural ? "Bowlers" : "Bowler";
+        case ALL_ROUNDER: return plural ? "All-rounders" : "All-rounder";
+        default:  return "Unknown";
+    }
+}
 
 void swapHeapNodes(HeapNode* a , HeapNode* b){
     HeapNode temp = *a;
@@ -94,20 +176,15 @@ HeapNode extractMax(MaxHeap *heap){
 }
 
 float PerformanceIndex(ODIPlayer* p){
-    if(p->Role == 1)      return (p->BattingAverage * p->StrikeRate) / 100.0;
-    else if(p->Role == 2) return (p->Wickets * 2) + (100 - p->EconomyRate);
-    else if(p->Role == 3) return ((p->BattingAverage * p->StrikeRate) / 100.0) + (p->Wickets * 2);
+    if(p->Role == BATSMAN)      return (p->BattingAverage * p->StrikeRate) / 100.0;
+    else if(p->Role == BOWLER) return (p->Wickets * 2) + (100 - p->EconomyRate);
+    else if(p->Role == ALL_ROUNDER) return ((p->BattingAverage * p->StrikeRate) / 100.0) + (p->Wickets * 2);
     return 0;
 }
 
 int findTeamByName(Team teamList[] , const char* name){
-    int low = 0 , high = TEAMCOUNT - 1;
-    while(low <= high){
-        int mid = low + (high - low) / 2;
-        int result = strcmp(teamList[mid].Name , name);
-        if(result == 0) return mid;
-        else if( result < 0) low = mid + 1;
-        else high = mid - 1;
+    for(int i = 0 ; i < TEAMCOUNT ; i++){
+        if(strcmp(teamList[i].Name , name) == 0) return i;
     }
     return -1;
 }
@@ -137,10 +214,10 @@ void initializeTeams(Team teamList[]){
 }
 
 int getRole(const char* role){
-    if(strcmp(role , "Batsman") == 0)         return 1;
-    else if(strcmp(role , "Bowler") == 0)     return 2;
-    else if(strcmp(role, "All-rounder") == 0) return 3;
-    return 0;
+    if(strcmp(role , "Batsman") == 0)         return BATSMAN;
+    else if(strcmp(role , "Bowler") == 0)     return BOWLER;
+    else if(strcmp(role, "All-rounder") == 0) return ALL_ROUNDER;
+    return ROLE_INVALID;
 }
 
 void calculateTeamAverage(Team *team){
@@ -148,7 +225,7 @@ void calculateTeamAverage(Team *team){
     int count = 0;
     ODIPlayer* temp = team->head;
     while(temp){
-        if(temp->Role == 1 || temp->Role == 3){
+        if(temp->Role == BATSMAN || temp->Role == ALL_ROUNDER){
             sum += temp->StrikeRate;
             count++;
         }
@@ -168,95 +245,115 @@ void insertRoleSorted(Team *team , ODIPlayer* player){
     *current = player;
 }
 
-void addPlayer(Team teamList[] , int TeamID){
+void insertPlayer(Team *team , ODIPlayer *player){
+    strcpy(player->TeamName , team->Name);
+    player->PerformanceIndex = PerformanceIndex(player);
+    player->next = team->head;
+    team->head = player;
+    insertRoleSorted(team , player);
+    team->TotalPlayers++;
+}
+
+void freeAllPlayers(Team teamList[]){
+    for(int i = 0 ; i < TEAMCOUNT ; i++){
+        ODIPlayer* temp = teamList[i].head;
+        while(temp){
+            ODIPlayer* next = temp->next;
+            free(temp);
+            temp = next;
+        }
+        teamList[i].head = NULL;
+        for(int j = 0 ; j < 4 ; j++) teamList[i].roleHead[j] = NULL;
+        teamList[i].TotalPlayers = 0;
+    }
+}
+
+int addPlayer(Team teamList[] , int TeamID){
     int index = findTeamByID(teamList , TeamID);
     if(index == -1){
         printf("Team not found.\n");
-        return;
+        return 0;
     }
     if(teamList[index].TotalPlayers >= MAX_PLAYER){
         printf("Team already has maximum players.\n");
-        return;
+        return 0;
     }
-    ODIPlayer* newplayer = malloc(sizeof(ODIPlayer));
-    if(!newplayer){
-        printf("Dynamic memory allocation failed.\n");
-        return;
-    }
+    ODIPlayer p;
+    int role , rc;
     printf("Enter Player Details:\n");
-    printf("Player ID: ");
-    if(scanf("%d",&newplayer->PlayerID)!= 1){
-        printf("Invalid Player ID.\n");
-        free(newplayer);
-        return;
+
+    rc = readInt("Player ID: " , &p.PlayerID);
+    if(rc != 1){
+        if(rc == 0) printf("Invalid Player ID.\n");
+        return rc;
     }
-    if(newplayer->PlayerID < MIN_PLAYERID || newplayer->PlayerID > MAX_PLAYERID){
+    if(p.PlayerID < MIN_PLAYERID || p.PlayerID > MAX_PLAYERID){
         printf("Player ID must be between 1 and 1000.\n");
-        free(newplayer);
-        return;
+        return 0;
     }
     for(int i = 0 ; i < TEAMCOUNT ; i++){
         ODIPlayer* temp = teamList[i].head;
         while(temp){
-            if(temp->PlayerID == newplayer->PlayerID){
+            if(temp->PlayerID == p.PlayerID){
                 printf("Player ID already exists.\n");
-                free(newplayer);
-                return;
+                return 0;
             }
             temp = temp->next;
         }
     }
-    printf("Name: ");
-    if(scanf(" %50[^\n]", newplayer->Name) != 1){
-        printf("Invalid name.\n");
-        free(newplayer);
-        return;
+    rc = readName("Name: " , p.Name);
+    if(rc != 1){
+        if(rc == 0) printf("Invalid name.\n");
+        return rc;
     }
-    printf("Role (1-Batsman, 2-Bowler, 3-All-rounder): ");
-    if(scanf("%d", &newplayer->Role) != 1 || newplayer->Role < 1 || newplayer->Role > 3){
+    rc = readInt("Role (1-Batsman, 2-Bowler, 3-All-rounder): " , &role);
+    if(rc != 1 || role < BATSMAN || role > ALL_ROUNDER){
+        if(rc == -1) return -1;
         printf("Invalid role.\n");
-        free(newplayer);
-        return;
+        return 0;
     }
-    printf("Total Runs: ");
-    if(scanf("%d", &newplayer->TotalRuns) != 1 || newplayer->TotalRuns < 0){
-        printf("Invalid total runs.\n");
-        free(newplayer);
-        return;
-    }
-    printf("Batting Average: ");
-    if(scanf("%f", &newplayer->BattingAverage) != 1 || !isfinite(newplayer->BattingAverage) || newplayer->BattingAverage < 0){
-        printf("Invalid batting average.\n");
-        free(newplayer);
-        return;
-    }
-    printf("Strike Rate: ");
-    if(scanf("%f", &newplayer->StrikeRate) != 1 ||  !isfinite(newplayer->StrikeRate) || newplayer->StrikeRate < 0){
-        printf("Invalid strike rate.\n");
-        free(newplayer);
-        return;
-    }
-    printf("Wickets: ");
+    p.Role = (Role)role;
 
-    if(scanf("%d", &newplayer->Wickets) != 1 || newplayer->Wickets < 0){
+    rc =readInt("Total Runs: " , &p.TotalRuns);
+    if(rc != 1 || p.TotalRuns < 0){
+        if(rc == -1) return -1;
+        printf("Invalid total runs.\n");
+        return 0;
+    }
+    rc = readFloat("Batting Average: " , &p.BattingAverage);
+    if(rc != 1 || p.BattingAverage < 0){
+        if(rc == -1) return -1;
+        printf("Invalid batting average.\n");
+        return 0;
+    }
+    rc = readFloat("Strike Rate: " , &p.StrikeRate);
+    if(rc != 1 || p.StrikeRate < 0){
+        if(rc == -1) return -1;
+        printf("Invalid strike rate.\n");
+        return 0;
+    }
+    rc = readInt("Wickets: " , &p.Wickets);
+    if(rc != 1 || p.Wickets < 0){
+        if(rc == -1) return -1;
         printf("Invalid wickets.\n");
-        free(newplayer);
-        return;
+        return 0;
     }
-    printf("Economy Rate: ");
-    if(scanf("%f", &newplayer->EconomyRate) != 1 ||  !isfinite(newplayer->EconomyRate) || newplayer->EconomyRate < 0){
+    rc = readFloat("Economy Rate: " , &p.EconomyRate);
+    if(rc != 1 || p.EconomyRate < 0){
+        if(rc == -1) return -1;
         printf("Invalid economy rate.\n");
-        free(newplayer);
-        return;
+        return 0;
     }
-    strcpy(newplayer->TeamName, teamList[index].Name);
-    newplayer->PerformanceIndex = PerformanceIndex(newplayer);
-    newplayer->next = teamList[index].head;
-    teamList[index].head = newplayer;
-    insertRoleSorted(&teamList[index], newplayer);
-    teamList[index].TotalPlayers++;
+    ODIPlayer* newplayer = malloc(sizeof(ODIPlayer));
+    if(!newplayer){
+        printf("Dynamic memory allocation failed.\n");
+        return 0;
+    }
+    *newplayer = p;
+    insertPlayer(&teamList[index] , newplayer);
     calculateTeamAverage(&teamList[index]);
     printf("\nPlayer added successfully to Team %s!\n", teamList[index].Name);
+    return 1;
 }
 
 void initializePlayers(Team teamList[]){
@@ -273,9 +370,8 @@ void initializePlayers(Team teamList[]){
         }
         newnode->PlayerID = players[i].id;
         strcpy(newnode->Name, players[i].name);
-        strcpy(newnode->TeamName, players[i].team);
         newnode->Role = getRole(players[i].role);
-        if(newnode->Role == 0){
+        if(newnode->Role == ROLE_INVALID){
             free(newnode);
             continue;
         }
@@ -284,17 +380,13 @@ void initializePlayers(Team teamList[]){
         newnode->StrikeRate = players[i].strikeRate;
         newnode->Wickets = players[i].wickets;
         newnode->EconomyRate = players[i].economyRate;
-        newnode->PerformanceIndex = PerformanceIndex(newnode);
-        newnode->next = teamList[index].head;
-        teamList[index].head = newnode;
-        insertRoleSorted(&teamList[index], newnode);
-        teamList[index].TotalPlayers++;
+        insertPlayer(&teamList[index] , newnode);
     }
 }
 
 void playerDetail(ODIPlayer *player){
     printf("%-5d %-22.22s %-12s %6d %6.1f %6.1f %5d %5.1f %10.2f\n",
-        player->PlayerID, player->Name, player->Role == 1 ? "Batsman" : player->Role == 2 ? "Bowler" : "All-rounder", player->TotalRuns, player->BattingAverage,
+        player->PlayerID, player->Name, roleName((player->Role) , 0), player->TotalRuns, player->BattingAverage,
         player->StrikeRate, player->Wickets, player->EconomyRate, player->PerformanceIndex
     );
 }
@@ -305,7 +397,7 @@ void displayKPlayers(Team teamList[] , int teamID , int role , int k){
         printf("Team not found.\n");
         return;
     }
-    if(role < 1 || role > 3){
+    if(role < BATSMAN || role > ALL_ROUNDER){
         printf("Invalid role.\n");
         return;
     }
@@ -314,7 +406,7 @@ void displayKPlayers(Team teamList[] , int teamID , int role , int k){
         return;
     }
     ODIPlayer *temp = teamList[index].roleHead[role];
-    printf("\nTop %d %s of Team %s:\n", k , role == 1 ? "Batsmen" : role == 2 ? "Bowlers" : "All-rounders", teamList[index].Name);
+    printf("\nTop %d %s of Team %s:\n", k , roleName((Role)role , 1) , teamList[index].Name);
     printf("\n%-5s %-22s %-12s %6s %6s %6s %5s %5s %10s\n", "ID", "Name", "Role", "Runs", "Avg", "SR", "Wkts", "ER", "Perf.Index");
     int count = 0;
     while(temp && count < k){
@@ -328,7 +420,7 @@ void displayKPlayers(Team teamList[] , int teamID , int role , int k){
 }
 
 void displayPlayersByRole(Team teamList[] , int role){
-    if(role < 1 || role > 3){
+    if(role < BATSMAN || role > ALL_ROUNDER){
         printf("Invalid role.\n");
         return;
     }
@@ -343,13 +435,13 @@ void displayPlayersByRole(Team teamList[] , int role){
             insertHeap(&heap , node);
         }
     }
-    printf("\n%s of all teams:\n", role == 1 ? "Batsmen" : role == 2 ? "Bowlers" : "All-rounders");
+    printf("\n%s of all teams:\n", roleName((Role)role , 1));
     printf("\n%-5s %-22s %-13s %-12s %6s %6s %6s %5s %5s %10s\n", "ID", "Name", "Team", "Role", "Runs", "Avg", "SR", "Wkts", "ER", "Perf.Index");
     while(heap.size > 0){
         HeapNode maxNode = extractMax(&heap);
         ODIPlayer *p = maxNode.player;
         printf("%-5d %-22.22s %-13.13s %-12s %6d %6.1f %6.1f %5d %5.1f %10.2f\n", p->PlayerID, p->Name, p->TeamName,
-        p->Role == 1 ? "Batsman" : p->Role == 2 ? "Bowler" : "All-Rounder", p->TotalRuns, p->BattingAverage, p->StrikeRate,
+        roleName(p->Role , 0), p->TotalRuns, p->BattingAverage, p->StrikeRate,
         p->Wickets, p->EconomyRate, p->PerformanceIndex);
         ODIPlayer *nextPlayer = maxNode.player->roleNext;
         if(nextPlayer){
@@ -416,8 +508,9 @@ int menu(){
     printf("5. Display all Players of specific role Across All Teams by performance index\n");
     printf("6. Exit\n");
     for(int i = 0; i < 70; i++)    printf("=");
-    printf("\nEnter your choice:");
-    scanf("%d" , &choice);
+    int rc = readInt("\nEnter your choice:" , &choice);
+    if(rc == -1) return -1;
+    if(rc == 0) return 0;
     return choice;
 }
 
@@ -428,25 +521,34 @@ int main(){
     for(int i = 0 ; i < TEAMCOUNT ; i++) calculateTeamAverage(&teamList[i]);
     while(1){
         int choice = menu();
-        if(choice == 6){
-            printf("Exiting Program.");
+        if(choice == -1 || choice == 6){
+            printf("Exiting Program.\n");
             break;
         }
+        int eof = 0;
         switch(choice){
             case 1:{
-                printf("Enter Team ID to add player: ");
                 int teamID;
-                if(scanf("%d", &teamID) != 1){
+                int rc = readInt("Enter Team ID to add player: " , &teamID);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid Team ID.\n");
                     break;
                 }
-                addPlayer(teamList, teamID);
+                if(addPlayer(teamList, teamID) == -1) eof = 1;
                 break;
             }
             case 2:{
                 int teamID;
-                printf("Enter Team ID: ");
-                if(scanf("%d", &teamID) != 1){
+                int rc = readInt("Enter Team ID: " , &teamID);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid Team ID.\n");
                     break;
                 }
@@ -457,19 +559,31 @@ int main(){
                 displayTeamsByASR(teamList);
                 break;
             case 4:{
-                int teamID, role, k;
-                printf("Enter Team ID: ");
-                if(scanf("%d", &teamID) != 1){
+                int teamID, role, k , rc;
+                rc = readInt("Enter Team ID: " , &teamID);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid Team ID.\n");
                     break;
                 }
-                printf("Enter Role (1-Batsman, 2-Bowler, 3-All-rounder): ");
-                if(scanf("%d", &role) != 1){
+                rc = readInt("Enter Role (1-Batsman, 2-Bowler, 3-All-rounder): ", &role);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid role.\n");
                     break;
                 }
-                printf("Enter number of players: ");
-                if(scanf("%d", &k) != 1){
+                rc = readInt("Enter number of players: ", &k);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid k.\n");
                     break;
                 }
@@ -478,8 +592,12 @@ int main(){
             }
             case 5:{
                 int role;
-                printf("Enter Role (1-Batsman, 2-Bowler, 3-All-rounder): ");
-                if(scanf("%d", &role) != 1){
+                int rc = readInt("Enter Role (1-Batsman, 2-Bowler, 3-All-rounder): " , &role);
+                if(rc != 1){
+                    if(rc == -1){
+                        eof = 1;
+                        break;
+                    }
                     printf("Invalid role.\n");
                     break;
                 }
@@ -489,6 +607,11 @@ int main(){
             default:
                 printf("Invalid choice. Enter a number between 1 and 6.\n");
         }
+        if(eof){
+            printf("\nEnd of input. Exiting Program.\n");
+            break;
+        }
     }
+    freeAllPlayers(teamList);
     return 0;
 }
